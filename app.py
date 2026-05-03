@@ -88,6 +88,29 @@ def clean_company_with_paren(text):
     return text
 
 
+def clean_consignee_address_and_bizno(address_text, existing_bizno=""):
+    """컨사이니 주소 안에 000-00-00000 형식 사업자번호가 있으면 사업자번호 칸으로 분리합니다.
+    전화번호(예: 010-3970-7762)는 000-00-00000 형식이 아니므로 주소에 그대로 유지합니다.
+    """
+    address_text = address_text or ""
+    biz_no = existing_bizno or ""
+
+    if not biz_no:
+        found = extract_business_no(address_text)
+        if found:
+            biz_no = found
+
+    if biz_no:
+        # 사업자번호만 주소에서 제거. 일반 전화번호는 제거하지 않음.
+        address_text = re.sub(rf"[\(（]?\s*{re.escape(biz_no)}\s*[\)）]?", " ", address_text)
+
+    # 사업자번호 제거 후 생긴 빈 괄호만 제거
+    address_text = re.sub(r"[\(（]\s*[\)）]", " ", address_text)
+    address_text = re.sub(r"[ \t]+", " ", address_text)
+    address_text = "\n".join(line.strip(" .,-") for line in address_text.splitlines() if line.strip(" .,-"))
+    return address_text.strip(), biz_no
+
+
 def clean_mark(text):
     lines = []
     for ln in (text or "").splitlines():
@@ -143,7 +166,7 @@ def clean_description_words(words):
             continue
         if re.fullmatch(r"\d+(?:\.\d+)?\s*CBM", t, re.I):
             continue
-        if re.fullmatch(r"\d+\s*PKGS?", t, re.I):
+        if re.fullmatch(r"\d+\s*(?:PKGS?|CTNS?|CARTONS?|PCS)", t, re.I):
             continue
         clean.append(w)
     return clean_description(text_from_words(clean))
@@ -222,6 +245,7 @@ def extract_one_pdf(file_bytes, filename, desc_right_ratio=0.89, table_bottom_ra
         consignee_no = extract_business_no(consignee_raw)
         consignee = clean_company_with_paren(consignee_raw)
         consignee_addr = "\n".join(consignee_lines[1:])
+        consignee_addr, consignee_no = clean_consignee_address_and_bizno(consignee_addr, consignee_no)
 
         notify_block = text_in_region(page, 0, h * 0.17, w * 0.57, h * 0.29)
 
@@ -249,7 +273,7 @@ def extract_one_pdf(file_bytes, filename, desc_right_ratio=0.89, table_bottom_ra
         mark = clean_mark(text_from_words(mark_words))
 
         pkg_region = text_in_region(page, w * 0.27, table_top, w * 0.39, table_top + h * 0.08, mode="start")
-        pkg = safe_search(r"(\d+)\s*PKGS?", pkg_region)
+        pkg = safe_search(r"(\d+)\s*(?:PKGS?|CTNS?|CARTONS?|PCS)", pkg_region)
         if not pkg:
             pkg = extract_qty_from_mark(mark)
 
@@ -326,7 +350,7 @@ def make_excel(df):
 st.set_page_config(page_title="BL PDF 변환기", page_icon="📄", layout="wide")
 
 st.title("📄 BL PDF → Excel 변환기")
-st.caption("v23 기준 수정본: 빈 괄호 제거 / 품명은 SAID TO CONTAIN 아래부터")
+st.caption("v23 기반 수정본: 수량 CTNS 인식 / 컨사이니 주소 사업자번호 분리 / 전화번호 유지")
 
 with st.sidebar:
     st.subheader("추출 설정")
@@ -375,7 +399,8 @@ if uploaded:
         st.write("- 컨사이니명에서 `(사업자번호)` 제거 후 사업자번호는 별도 칸에 저장")
         st.write("- MARK는 줄 수 기준이 아니라 왼쪽 MARK 구역에 있는 텍스트 전체를 추출")
         st.write("- 품명은 Description 구역 기준으로 추출하고, KGS/CBM/PKGS 패턴은 품명에서 자동 제외")
-        st.write("- 수량은 PKGS 칸이 비어도 MARK 범위(C/T:1-71, FR-001~037 등)에서 자동 계산")
+        st.write("- 수량은 PKGS/CTNS/CARTONS/PCS 형태를 인식하고, 비어 있으면 MARK 범위(C/T:1-71, FR-001~037 등)에서 자동 계산")
+        st.write("- 컨사이니 주소에 000-00-00000 형식 사업자번호가 들어간 경우 사업자번호 칸으로 분리하고, 주소의 전화번호는 유지")
         st.write("- 출발지/도착지는 SHIDAO CHINA=CNSHD, YANTAI CHINA=CNYNT, WEIHAI CHINA=CNWEI, GUNSAN KOREA=KRKUV, INCHEON KOREA=KRINC로 변환")
         st.write("- 항차가 숫자만 있으면 뒤에 E 자동 추가 예: 1538 → 1538E")
         st.write("- 쉬퍼가 있는데 쉬퍼주소가 비어 있으면 CHINA 자동 입력")
